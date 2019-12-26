@@ -46,6 +46,7 @@ use constant {
     return $self->{_value};
   }
 }
+
 {
   # provides a buffer for receive Redis reply buffer
   package RedisReplyBuffer;
@@ -66,7 +67,7 @@ use constant {
 
     if (defined $offset) {
       if ($offset < 0) {
-        die "error: Invalid argument offset $offset\n";
+        die "[ERROR] Invalid argument offset $offset\n";
       }
     } else {
       $offset = 0;
@@ -188,6 +189,7 @@ use constant {
     $self->{_offset} = $offset;
   }
 }
+
 {
   # provides a stack for parsing Redis reply
   package Stack;
@@ -195,20 +197,25 @@ use constant {
   sub new {
     my $class = shift;
     my $self = {
-      _stack => undef,
+      _stack => [],
     };
     bless $self, $class;
     return $self;
+  }
+
+  sub get {
+    my ( $self, $index ) = @_;
+    return unless defined $index;
+
+    my $stack = $self->{_stack};
+    return @$stack[$index];
   }
 
   sub size {
     my $self = $_[0];
 
     my $stack = $self->{_stack};
-    if (defined $stack) {
-      return scalar @$stack;
-    }
-    return 0;
+    return scalar @$stack;
   }
 
   sub push {
@@ -216,11 +223,7 @@ use constant {
     return unless defined $item;
 
     my $stack = $self->{_stack};
-    if (!defined $stack) {
-      $self->{_stack} = [ $item ];
-    } else {
-      push @$stack, $item;
-    }
+    push @$stack, $item;
     return $item;
   }
 
@@ -228,21 +231,14 @@ use constant {
     my $self = $_[0];
 
     my $stack = $self->{_stack};
-    if (defined $stack) {
-      return pop @$stack;
-    }
-    return undef;
+    return pop @$stack;
   }
 
   sub peek {
     my $self = $_[0];
 
-    if (defined $self->{_stack}) {
-      my @stack = @{ $self->{_stack} };
-      my $last  = $#stack;
-      return $stack[$last];
-    }
-    return undef;
+    my $stack = $self->{_stack};
+    return @$stack[$#$stack];
   }
 
   sub clear {
@@ -251,6 +247,7 @@ use constant {
     $self->{_stack} = undef;
   }
 }
+
 {
   # provides a builder for reading and parsing Redis reply buffer
   package RedisReplyBuilder;
@@ -335,14 +332,14 @@ use constant {
         }
         return $reply;
       } else {
-        die "error: Invalid type flag 0x".unpack('H*', $type)."\n";
+        die "[ERROR] Invalid type flag 0x".unpack('H*', $type)."\n";
       }
     } else {
       # peek the stack
       my $state = $self->{_stack}->peek();
 
       if (!defined $state) {
-        die "error: Cannot parse datagram\n";
+        die "[ERROR] Cannot parse datagram\n";
       }
 
       my $type = $state->{type};
@@ -442,7 +439,7 @@ use constant {
     if ($buffer->size >= $size + length(DELIMITER)) {
       my $token     = $buffer->readBytes($size);
       my $delimiter = $buffer->readBytes(length(DELIMITER));
-      die "error: Invalid data\n" if $delimiter ne DELIMITER;
+      die "[ERROR] Invalid package delimiter.t\n" if $delimiter ne DELIMITER;
 
       my $reply = new RedisReply(::REDIS_REPLY_STRING, $token);
       $buffer->shirink();
@@ -495,6 +492,7 @@ use constant {
     return undef;
   }
 }
+
 {
   # provides a set operators for Redis client
   package Redis;
@@ -519,15 +517,18 @@ use constant {
   sub connect {
     my ( $self ) = @_;
 
-    my $socket = IO::Socket::INET->new( PeerHost => $self->{_host},
-                                        PeerPort => $self->{_port},
-                                        Proto    => 'tcp')
-            or die "error: Cannot connect to server '$self->{_host}:$self->{_port}'\n";
+    my $socket = $self->{_socket};
+    if (!defined $socket) {
+      my $socket = IO::Socket::INET->new( PeerHost => $self->{_host},
+                                          PeerPort => $self->{_port},
+                                          Proto    => 'tcp')
+              or die "[ERROR] Cannot connect to server '$self->{_host}:$self->{_port}'\n";
 
-    $socket->autoflush(1);
-    $socket->blocking(0);
+      $socket->autoflush(1);
+      $socket->blocking(0);
 
-    $self->{_socket} = $socket;
+      $self->{_socket} = $socket;
+    }
   }
 
   # executes a command
@@ -535,7 +536,7 @@ use constant {
     my $self    = shift;
 
     my $socket  = $self->{_socket};
-    die "error: No connection\n" if !defined $socket || !$socket->connected;
+    die "[ERROR] No connection.\n" if !defined $socket || !$socket->connected;
 
     my @command = @_;
 
@@ -586,6 +587,164 @@ use constant {
       }
     }
     return undef;
+  }
+}
+
+{
+  package StdOutFormatter;
+
+  sub print {
+    my ( $writer, $reply )  = @_;
+    return unless defined $writer;
+    return unless defined $reply;
+
+    __writeReply($writer, $reply, undef, undef, undef);
+  }
+
+  sub __writeReply {
+    my ( $writer, $reply, $stack, $index, $capacity ) = @_;
+    return unless defined $writer;
+    return unless defined $reply;
+
+    if    ($reply->type == ::REDIS_REPLY_NIL    ) { __writeNilReply($writer, $reply, $stack, $index);     }
+    elsif ($reply->type == ::REDIS_REPLY_STATUS ) { __writeStatusReply($writer, $reply, $stack, $index);  }
+    elsif ($reply->type == ::REDIS_REPLY_ERROR  ) { __writeErrorReply($writer, $reply, $stack, $index);   }
+    elsif ($reply->type == ::REDIS_REPLY_INTEGER) { __writeIntegerReply($writer, $reply, $stack, $index); }
+    elsif ($reply->type == ::REDIS_REPLY_STRING ) { __writeStringReply($writer, $reply, $stack, $index);  }
+    elsif ($reply->type == ::REDIS_REPLY_ARRAY  ) {
+      my $children = scalar @{$reply->value};
+      if ($children == 0) {
+        __writeArrayReply($writer, $reply, $stack, $index, $capacity);
+      } else {
+        $stack = $stack || new Stack();
+        $stack->push({
+          reply    => $reply,
+          children => $children,
+          index    => $index || 0,
+          siblings => $capacity,
+        });
+        for (my $i = 0; $i < $children; ++$i) {
+          my $v = @{$reply->value}[$i];
+          __writeReply($writer, $v, $stack, $i, $children);
+        }
+        $stack->pop();
+      }
+    }
+    else {
+      die "[ERROR] Unknown reply type '$reply->type'.\n";
+    }
+  }
+
+  sub __writeIndexer {
+    my ( $stack, $writer, $index ) = @_;
+    return unless defined $stack;
+    return unless defined $writer;
+
+    for (my $i = 0; $i < $stack->size; ++$i) {
+      my $state = $stack->get($i);
+      my $reply = $state->{reply};
+      if (defined $reply) {
+        # peek child
+        my $child = $stack->get($i+1);
+        if (!defined $child) {
+          # we won't print root array
+          if (defined $state->{siblings}) {
+            my $digtals = length($state->{siblings});
+            if ($index == 0) {
+              $writer->( sprintf("%${digtals}s) ", $state->{index} + 1) );
+            } else {
+              my $padding = $digtals;
+              $writer->( sprintf("%${padding}s  ", '' ) );
+            }
+          }
+          my $digtals = length($state->{children});
+          $writer->( sprintf("%${digtals}s) ", $index + 1) );
+          last;
+        } elsif(defined $child->{index}  &&  $child->{index} == 0) {
+          my $digtals = length($state->{siblings});
+          $writer->( sprintf("%${digtals}s) ", $state->{index} + 1) );
+        } else {
+          if (defined $state->{siblings}) {
+            my $padding = length($state->{siblings});
+            $writer->( sprintf("%${padding}s  ", '' ) );
+          }
+        }
+      }
+    }
+  }
+
+  sub __writeNilReply {
+    my ( $writer, $reply, $stack, $index ) = @_;
+    return unless defined $writer;
+    return unless defined $reply;
+
+    if (defined $index) {
+      __writeIndexer($stack, $writer, $index);
+    }
+    $writer->("(nil)");
+    $writer->("\n");
+  }
+
+  sub __writeStatusReply {
+    my ( $writer, $reply, $stack, $index ) = @_;
+    return unless defined $writer;
+    return unless defined $reply;
+
+    if (defined $index) {
+      __writeIndexer($stack, $writer, $index);
+    }
+    $writer->($reply->value);
+    $writer->("\n");
+  }
+
+  sub __writeErrorReply {
+    my ( $writer, $reply, $stack, $index ) = @_;
+    return unless defined $writer;
+    return unless defined $reply;
+
+    if (defined $index) {
+      __writeIndexer($stack, $writer, $index);
+    }
+    $writer->(sprintf("(error) %s", $reply->value));
+    $writer->("\n");
+  }
+
+  sub __writeIntegerReply {
+    my ( $writer, $reply, $stack, $index ) = @_;
+    return unless defined $writer;
+    return unless defined $reply;
+
+    if (defined $index) {
+      __writeIndexer($stack, $writer, $index);
+    }
+    $writer->(sprintf("(integer) %d", $reply->value));
+    $writer->("\n");
+  }
+
+  sub __writeStringReply {
+    my ( $writer, $reply, $stack, $index ) = @_;
+    return unless defined $writer;
+    return unless defined $reply;
+
+    if (defined $index) {
+      __writeIndexer($stack, $writer, $index);
+    }
+    $writer->(sprintf("\"%s\"", $reply->value));
+    $writer->("\n");
+  }
+
+  sub __writeArrayReply {
+    my ( $writer, $reply, $stack, $index ) = @_;
+    return unless defined $writer;
+    return unless defined $reply;
+
+    if (scalar @{$reply->value} == 0) {
+      if (defined $index) {
+        __writeIndexer($stack, $writer, $index);
+      }
+      $writer->("(empty list or set)");
+      $writer->("\n");
+    }
   }
 }
 1;
