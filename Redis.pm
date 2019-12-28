@@ -54,8 +54,8 @@ use constant {
   sub new {
     my $class = shift;
     my $self = {
-      _buffer => undef,
-      _offset => undef,
+      _buffer => '',
+      _offset => 0,
     };
     bless $self, $class;
     return $self;
@@ -74,20 +74,14 @@ use constant {
     }
 
     my $buffer = $self->{_buffer};
-
-    if (defined $buffer) {
-      $self->{_buffer} = $buffer . substr($data, $offset);
-    } else {
-      $self->{_buffer} = $data;
-      $self->{_offset} = $offset;
-    }
+    $self->{_buffer} = $buffer . substr($data, $offset);
   }
 
   sub eof {
     my $self = $_[0];
 
     my $buffer = $self->{_buffer};
-    if (defined $buffer) {
+    {
       my $offset = $self->{_offset};
       return ((length($buffer) - $offset) == 0);
     }
@@ -98,7 +92,7 @@ use constant {
     my $self = $_[0];
 
     my $buffer = $self->{_buffer};
-    if (defined $buffer) {
+    {
       my $offset = $self->{_offset};
       return length($buffer) - $offset;
     }
@@ -108,14 +102,14 @@ use constant {
   sub readToken {
     my ( $self, $delimiter ) = @_;
 
-    my $data = $self->{_buffer};
-    if (defined $data) {
+    my $buffer = $self->{_buffer};
+    {
       my $offset = $self->{_offset};
       # if not eof?
-      if (length($data) > $offset) {
-        my $pos    = index($data, $delimiter, $offset);
+      if (length($buffer) > $offset) {
+        my $pos    = index($buffer, $delimiter, $offset);
         if ($pos > 0) {
-          my $value = substr($data, $offset, $pos - $offset);
+          my $value = substr($buffer, $offset, $pos - $offset);
 
           # update offset
           $self->{_offset} = $pos + length($delimiter);
@@ -129,14 +123,14 @@ use constant {
   sub readBytes {
     my ( $self, $length ) = @_;
 
-    my $data = $self->{_buffer};
-    if (defined $data) {
+    my $buffer = $self->{_buffer};
+    {
       my $offset = $self->{_offset};
-      if (length($data) > $offset) {
-        my $size = length($data) - $offset;
+      if (length($buffer) > $offset) {
+        my $size = length($buffer) - $offset;
 
         if ($length <= $size) {
-          my $value = substr($data, $offset, $length);
+          my $value = substr($buffer, $offset, $length);
 
           # update offset
           $self->{_offset} = $offset + $length;
@@ -150,11 +144,11 @@ use constant {
   sub skip {
     my ( $self, $length ) = @_;
 
-    my $data = $self->{_buffer};
-    if (defined $data) {
+    my $buffer = $self->{_buffer};
+    {
       my $offset = $self->{_offset};
-      if (length($data) > $offset) {
-        my $size = length($data) - $offset;
+      if (length($buffer) > $offset) {
+        my $size = length($buffer) - $offset;
 
         if ($length <= $size) {
           # update offset
@@ -167,12 +161,12 @@ use constant {
   sub shirink {
     my ( $self, $forcible ) = @_;
 
-    my $data = $self->{_buffer};
-    if (defined $data) {
+    my $buffer = $self->{_buffer};
+    {
       my $offset = $self->{_offset};
-      if (length($data) > $offset) {
+      if (length($buffer) > $offset) {
         if ($forcible || $offset > 256) {
-          $self->{_buffer} = substr($data, $offset);
+          $self->{_buffer} = substr($buffer, $offset);
           $self->{_offset} = 0;
 
           return 1;
@@ -183,10 +177,10 @@ use constant {
   }
 
   sub clear {
-    my ( $self, $data, $offset ) = @_;
+    my ( $self, $buffer, $offset ) = @_;
 
-    $self->{_buffer} = $data;
-    $self->{_offset} = $offset;
+    $self->{_buffer} = $buffer || '';
+    $self->{_offset} = $offset || 0;
   }
 }
 
@@ -244,7 +238,7 @@ use constant {
   sub clear {
     my $self = $_[0];
 
-    $self->{_stack} = undef;
+    $self->{_stack} = [];
   }
 }
 
@@ -513,6 +507,16 @@ use constant {
     return $self;
   }
 
+  sub host {
+    my $self = $_[0];
+    return $self->{_host};
+  }
+
+  sub port {
+    my $self = $_[0];
+    return $self->{_port};
+  }
+
   # builds a connection to Redis
   sub connect {
     my ( $self ) = @_;
@@ -594,10 +598,10 @@ use constant {
   package StdOutFormatter;
 
   sub print {
-    my ( $writer, $reply )  = @_;
-    return unless defined $writer;
+    my ( $reply, $writer )  = @_;
     return unless defined $reply;
 
+    $writer = $writer || \&{sub { print shift; }};
     __writeReply($writer, $reply, undef, undef, undef);
   }
 
