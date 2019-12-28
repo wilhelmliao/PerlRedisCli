@@ -1,5 +1,8 @@
 use strict;
 
+# Redis Protocol specification
+# see https://redis.io/topics/protocol
+
 # the Redis reply types, see https://github.com/redis/hiredis/blob/master/read.h
 use constant {
   REDIS_REPLY_STRING  => 1,
@@ -19,8 +22,9 @@ use constant {
 };
 
 
+# RedisReply;
+# represents Redis reply
 {
-  # represents Redis reply
   package RedisReply;
 
 
@@ -47,8 +51,9 @@ use constant {
   }
 }
 
+# provides a buffer for receive Redis reply buffer
+# RedisReplyBuffer;
 {
-  # provides a buffer for receive Redis reply buffer
   package RedisReplyBuffer;
 
   sub new {
@@ -184,8 +189,9 @@ use constant {
   }
 }
 
+# Stack;
+# provides a stack for parsing Redis reply
 {
-  # provides a stack for parsing Redis reply
   package Stack;
 
   sub new {
@@ -242,8 +248,9 @@ use constant {
   }
 }
 
+# RedisReplyBuilder;
+# provides a builder for reading and parsing Redis reply buffer
 {
-  # provides a builder for reading and parsing Redis reply buffer
   package RedisReplyBuilder;
 
   use constant DELIMITER => "\r\n";
@@ -487,6 +494,8 @@ use constant {
   }
 }
 
+# Redis;
+# provides a set operators for Redis client
 {
   # provides a set operators for Redis client
   package Redis;
@@ -594,8 +603,10 @@ use constant {
   }
 }
 
+# StdOutReplyFormatter
+# provider a formatter for format reply
 {
-  package StdOutFormatter;
+  package StdOutReplyFormatter;
 
   sub print {
     my ( $reply, $writer )  = @_;
@@ -750,5 +761,120 @@ use constant {
       $writer->("\n");
     }
   }
+}
+
+# NOTE: sds *sdssplitargs()
+# see https://github.com/antirez/sds/blob/78df7252764566d9fd8b2fbccf6a320e77f3026e/sds.c#L959
+sub __split_args {
+  my $input = $_[0];
+
+  my @args = ();
+  for (my $i = 0; $i < length($input); $i++) {
+    my $c = substr($input, $i, 1);
+    next if ($c =~ /[[:space:]]/);
+
+    my $quoted_sign = undef;
+    my $token       = undef;
+
+    for (;; $i++) {
+      if ($i < length($input)) {
+        $c = substr($input, $i, 1);
+      } else {
+        undef $c;
+      }
+      if ((defined $quoted_sign) && ($quoted_sign eq '"')) {
+        if (!defined $c) {
+          goto err;
+        }
+        $token = $token || '';
+        if ($c eq "\\") {
+          my $escape_char = substr($input, ++$i, 1);
+          if (!defined $escape_char) {
+            goto err;
+          }
+          $c = $escape_char;
+          if ($c eq 'x') {
+            my $hex = substr($input, $i + 1, 2);
+            if ((defined $hex) && ($hex !~ /[0-9a-f]{2}/i)) {
+              $token = $token . pack('H*', $hex);
+              $i = $i + 2;
+            } else {
+              $token = $token . $c;
+            }
+          }
+          elsif ($c eq 'n') { $token = $token . "\n"; }
+          elsif ($c eq 'r') { $token = $token . "\r"; }
+          elsif ($c eq 't') { $token = $token . "\t"; }
+          elsif ($c eq 'b') { $token = $token . "\b"; }
+          elsif ($c eq 'a') { $token = $token . "\a"; }
+          else {
+            $token = $token . $c;
+          }
+        } elsif ($c eq '"') {
+          # closing quote must be followed by a space or
+          # nothing at all.
+          if ((++$i) < length($input)) {
+            $c = substr($input, $i, 1);
+            if ((defined $c) && ($c !~ /[[:space:]]/)) {
+              goto err;
+            }
+          }
+          push @args, ($token || '');
+          undef $token;
+          undef $quoted_sign;
+        } else {
+          $token = $token . $c;
+        }
+      } elsif ((defined $quoted_sign) && ($quoted_sign eq "'")) {
+        if (!defined $c) {
+          goto err;
+        }
+        $token = $token || '';
+        if ($c eq "\\") {
+          my $next_char = substr($input, $i + 1, 1);
+          if ((defined $next_char) && ($next_char eq "'")) {
+            $i++;
+            $token = $token . $next_char;
+          } else {
+            $token = $token . $c;
+          }
+        } elsif ($c eq "'") {
+          # closing quote must be followed by a space or
+          # nothing at all.
+          if ((++$i) < length($input)) {
+            $c = substr($input, $i, 1);
+            if ((defined $c) && ($c !~ /[[:space:]]/)) {
+              goto err;
+            }
+          }
+          push @args, $token;
+          undef $token;
+          undef $quoted_sign;
+        } else {
+          $token = $token . $c;
+        }
+      } else {
+        last unless defined $c;
+
+        if ($c =~ /[ \n\r\t\0]/) {
+          if (defined $token) {
+            push @args, $token;
+            undef $token;
+          }
+        } elsif ($c =~ /['"]/) {
+          $quoted_sign = $c;
+        } else {
+          $token = ($token || '') . $c;
+        }
+      }
+    }
+    if (defined $token) {
+      push @args, $token;
+    }
+  }
+  return \@args;
+
+  err:
+  return undef;
 }
 1;
