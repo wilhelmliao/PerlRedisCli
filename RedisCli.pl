@@ -69,7 +69,9 @@ sub __split_args {
       if ((defined $quoted_sign) && ($quoted_sign eq '"')) {
         if (!defined $c) {
           goto err;
-        } elsif ($c eq "\\") {
+        }
+        $token = $token || '';
+        if ($c eq "\\") {
           my $escape_char = substr($input, ++$i, 1);
           if (!defined $escape_char) {
             goto err;
@@ -110,7 +112,9 @@ sub __split_args {
       } elsif ((defined $quoted_sign) && ($quoted_sign eq "'")) {
         if (!defined $c) {
           goto err;
-        } elsif ($c eq "\\") {
+        }
+        $token = $token || '';
+        if ($c eq "\\") {
           my $next_char = substr($input, $i + 1, 1);
           if ((defined $next_char) && ($next_char eq "'")) {
             $i++;
@@ -127,7 +131,7 @@ sub __split_args {
               goto err;
             }
           }
-          push @args, ($token || '');
+          push @args, $token;
           undef $token;
           undef $quoted_sign;
         } else {
@@ -144,7 +148,7 @@ sub __split_args {
         } elsif ($c =~ /['"]/) {
           $quoted_sign = $c;
         } else {
-          $token = $token . $c;
+          $token = ($token || '') . $c;
         }
       }
     }
