@@ -590,7 +590,6 @@ use constant {
     my $builder = $self->{_builder};
     while (1) {
       my $bytes = sysread( $socket, $data, BUFFER_SIZE );
-      print $data;
       # return unless defined $bytes && $bytes;
       if (defined $bytes) {
         $buffer->append($data);
