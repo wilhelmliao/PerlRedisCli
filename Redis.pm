@@ -22,7 +22,7 @@ use constant {
 };
 
 
-# RedisReply;
+# RedisReply
 # represents Redis reply
 {
   package RedisReply;
@@ -51,8 +51,8 @@ use constant {
   }
 }
 
+# RedisReplyBuffer
 # provides a buffer for receive Redis reply buffer
-# RedisReplyBuffer;
 {
   package RedisReplyBuffer;
 
@@ -189,7 +189,7 @@ use constant {
   }
 }
 
-# Stack;
+# Stack
 # provides a stack for parsing Redis reply
 {
   package Stack;
@@ -248,7 +248,7 @@ use constant {
   }
 }
 
-# RedisReplyBuilder;
+# RedisReplyBuilder
 # provides a builder for reading and parsing Redis reply buffer
 {
   package RedisReplyBuilder;
@@ -494,10 +494,9 @@ use constant {
   }
 }
 
-# Redis;
+# Redis
 # provides a set operators for Redis client
 {
-  # provides a set operators for Redis client
   package Redis;
   use IO::Socket::INET;
 
@@ -604,7 +603,7 @@ use constant {
 }
 
 # StdOutReplyFormatter
-# provider a formatter for format reply
+# provides a formatter for format reply
 {
   package StdOutReplyFormatter;
 
@@ -631,7 +630,7 @@ use constant {
       if ($capacity == 0) {
         __writeArrayReply($writer, $reply, $stack, $indexers);
       } else {
-        $stack = $stack || new Stack();
+        $stack    = $stack || new Stack();
         $indexers = $indexers || new Stack();
         my $indexer = {
           capacity => $capacity,
@@ -668,6 +667,7 @@ use constant {
         my $indent = length($indexer->{capacity});
         push @prefixes, sprintf("%${indent}s  ", ' ');
       } else {
+        # write index
         my $digitals = length($indexer->{capacity});
         push @prefixes, sprintf("%${digitals}s) ", $indexer->{index});
 
