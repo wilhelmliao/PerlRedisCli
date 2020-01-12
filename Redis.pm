@@ -590,6 +590,7 @@ use constant {
     my $builder = $self->{_builder};
     while (1) {
       my $bytes = sysread( $socket, $data, BUFFER_SIZE );
+      print $data;
       # return unless defined $bytes && $bytes;
       if (defined $bytes) {
         $buffer->append($data);
@@ -617,32 +618,35 @@ use constant {
   }
 
   sub __writeReply {
-    my ( $writer, $reply, $stack, $index, $capacity ) = @_;
+    my ( $writer, $reply, $stack, $indexers ) = @_;
     return unless defined $writer;
     return unless defined $reply;
 
-    if    ($reply->type == ::REDIS_REPLY_NIL    ) { __writeNilReply($writer, $reply, $stack, $index);     }
-    elsif ($reply->type == ::REDIS_REPLY_STATUS ) { __writeStatusReply($writer, $reply, $stack, $index);  }
-    elsif ($reply->type == ::REDIS_REPLY_ERROR  ) { __writeErrorReply($writer, $reply, $stack, $index);   }
-    elsif ($reply->type == ::REDIS_REPLY_INTEGER) { __writeIntegerReply($writer, $reply, $stack, $index); }
-    elsif ($reply->type == ::REDIS_REPLY_STRING ) { __writeStringReply($writer, $reply, $stack, $index);  }
+    if    ($reply->type == ::REDIS_REPLY_NIL    ) { __writeNilReply($writer, $reply, $stack, $indexers);     }
+    elsif ($reply->type == ::REDIS_REPLY_STATUS ) { __writeStatusReply($writer, $reply, $stack, $indexers);  }
+    elsif ($reply->type == ::REDIS_REPLY_ERROR  ) { __writeErrorReply($writer, $reply, $stack, $indexers);   }
+    elsif ($reply->type == ::REDIS_REPLY_INTEGER) { __writeIntegerReply($writer, $reply, $stack, $indexers); }
+    elsif ($reply->type == ::REDIS_REPLY_STRING ) { __writeStringReply($writer, $reply, $stack, $indexers);  }
     elsif ($reply->type == ::REDIS_REPLY_ARRAY  ) {
-      my $children = scalar @{$reply->value};
-      if ($children == 0) {
-        __writeArrayReply($writer, $reply, $stack, $index, $capacity);
+      my $capacity = scalar @{$reply->value};
+      if ($capacity == 0) {
+        __writeArrayReply($writer, $reply, $stack, $indexers);
       } else {
         $stack = $stack || new Stack();
-        $stack->push({
-          reply    => $reply,
-          children => $children,
-          index    => $index || 0,
-          siblings => $capacity,
-        });
-        for (my $i = 0; $i < $children; ++$i) {
+        $indexers = $indexers || new Stack();
+        my $indexer = {
+          capacity => $capacity,
+          index    => 0,
+        };
+        $indexers->push($indexer);
+        $stack->push($reply);
+        for (my $i = 0; $i < $capacity; ++$i) {
           my $v = @{$reply->value}[$i];
-          __writeReply($writer, $v, $stack, $i, $children);
+          $indexer->{index}++;
+          __writeReply($writer, $v, $stack, $indexers);
         }
         $stack->pop();
+        $indexers->pop();
       }
     }
     else {
@@ -651,112 +655,88 @@ use constant {
   }
 
   sub __writeIndexer {
-    my ( $stack, $writer, $index ) = @_;
-    return unless defined $stack;
+    my ( $writer, $indexers ) = @_;
+    return unless defined $indexers;
     return unless defined $writer;
 
-    for (my $i = 0; $i < $stack->size; ++$i) {
-      my $state = $stack->get($i);
-      my $reply = $state->{reply};
-      if (defined $reply) {
-        # peek child
-        my $child = $stack->get($i+1);
-        if (!defined $child) {
-          # we won't print root array
-          if (defined $state->{siblings}) {
-            my $digtals = length($state->{siblings});
-            if ($index == 0) {
-              $writer->( sprintf("%${digtals}s) ", $state->{index} + 1) );
-            } else {
-              my $padding = $digtals;
-              $writer->( sprintf("%${padding}s  ", '' ) );
-            }
-          }
-          my $digtals = length($state->{children});
-          $writer->( sprintf("%${digtals}s) ", $index + 1) );
-          last;
-        } elsif(defined $child->{index}  &&  $child->{index} == 0) {
-          my $digtals = length($state->{siblings});
-          $writer->( sprintf("%${digtals}s) ", $state->{index} + 1) );
-        } else {
-          if (defined $state->{siblings}) {
-            my $padding = length($state->{siblings});
-            $writer->( sprintf("%${padding}s  ", '' ) );
-          }
+    my @prefixes = ();
+    my $skipIndex = undef;
+
+    for (my $i = $indexers->size - 1; $i >= 0; $i--) {
+      my $indexer = $indexers->get($i);
+      if (defined $skipIndex) {
+        # write indent
+        my $indent = length($indexer->{capacity});
+        push @prefixes, sprintf("%${indent}s  ", ' ');
+      } else {
+        my $digitals = length($indexer->{capacity});
+        push @prefixes, sprintf("%${digitals}s) ", $indexer->{index});
+
+        if ($indexer->{index} > 1) {
+          $skipIndex = 1;
         }
       }
     }
+    $writer->( join('', reverse(@prefixes)) );
   }
 
   sub __writeNilReply {
-    my ( $writer, $reply, $stack, $index ) = @_;
+    my ( $writer, $reply, $stack, $indexers ) = @_;
     return unless defined $writer;
     return unless defined $reply;
 
-    if (defined $index) {
-      __writeIndexer($stack, $writer, $index);
-    }
+    __writeIndexer($writer, $indexers);
     $writer->("(nil)");
     $writer->("\n");
   }
 
   sub __writeStatusReply {
-    my ( $writer, $reply, $stack, $index ) = @_;
+    my ( $writer, $reply, $stack, $indexers ) = @_;
     return unless defined $writer;
     return unless defined $reply;
 
-    if (defined $index) {
-      __writeIndexer($stack, $writer, $index);
-    }
+    __writeIndexer($writer, $indexers);
     $writer->($reply->value);
     $writer->("\n");
   }
 
   sub __writeErrorReply {
-    my ( $writer, $reply, $stack, $index ) = @_;
+    my ( $writer, $reply, $stack, $indexers ) = @_;
     return unless defined $writer;
     return unless defined $reply;
 
-    if (defined $index) {
-      __writeIndexer($stack, $writer, $index);
-    }
+    __writeIndexer($writer, $indexers);
     $writer->(sprintf("(error) %s", $reply->value));
     $writer->("\n");
   }
 
   sub __writeIntegerReply {
-    my ( $writer, $reply, $stack, $index ) = @_;
+    my ( $writer, $reply, $stack, $indexers ) = @_;
     return unless defined $writer;
     return unless defined $reply;
 
-    if (defined $index) {
-      __writeIndexer($stack, $writer, $index);
-    }
+    __writeIndexer($writer, $indexers);
     $writer->(sprintf("(integer) %d", $reply->value));
     $writer->("\n");
   }
 
   sub __writeStringReply {
-    my ( $writer, $reply, $stack, $index ) = @_;
+    my ( $writer, $reply, $stack, $indexers ) = @_;
     return unless defined $writer;
     return unless defined $reply;
 
-    if (defined $index) {
-      __writeIndexer($stack, $writer, $index);
-    }
+    __writeIndexer($writer, $indexers);
     $writer->(sprintf("\"%s\"", $reply->value));
     $writer->("\n");
   }
 
   sub __writeArrayReply {
-    my ( $writer, $reply, $stack, $index ) = @_;
+    my ( $writer, $reply, $stack, $indexers ) = @_;
     return unless defined $writer;
     return unless defined $reply;
 
     if (scalar @{$reply->value} == 0) {
-      if (defined $index) {
-        __writeIndexer($stack, $writer, $index);
-      }
+    __writeIndexer($writer, $indexers);
       $writer->("(empty list or set)");
       $writer->("\n");
     }
@@ -786,7 +766,7 @@ sub __split_args {
         if (!defined $c) {
           goto err;
         }
-        $token = $token || '';
+        $token = '' unless (defined $token);
         if ($c eq "\\") {
           my $escape_char = substr($input, ++$i, 1);
           if (!defined $escape_char) {
@@ -796,10 +776,10 @@ sub __split_args {
           if ($c eq 'x') {
             my $hex = substr($input, $i + 1, 2);
             if ((defined $hex) && ($hex !~ /[0-9a-f]{2}/i)) {
-              $token = $token . pack('H*', $hex);
+              $token .= pack('H*', $hex);
               $i = $i + 2;
             } else {
-              $token = $token . $c;
+              $token .= $c;
             }
           }
           elsif ($c eq 'n') { $token = $token . "\n"; }
@@ -808,7 +788,7 @@ sub __split_args {
           elsif ($c eq 'b') { $token = $token . "\b"; }
           elsif ($c eq 'a') { $token = $token . "\a"; }
           else {
-            $token = $token . $c;
+            $token .= $c;
           }
         } elsif ($c eq '"') {
           # closing quote must be followed by a space or
@@ -819,24 +799,24 @@ sub __split_args {
               goto err;
             }
           }
-          push @args, ($token || '');
+          push @args, $token;
           undef $token;
           undef $quoted_sign;
         } else {
-          $token = $token . $c;
+          $token .= $c;
         }
       } elsif ((defined $quoted_sign) && ($quoted_sign eq "'")) {
         if (!defined $c) {
           goto err;
         }
-        $token = $token || '';
+        $token = '' unless (defined $token);
         if ($c eq "\\") {
           my $next_char = substr($input, $i + 1, 1);
           if ((defined $next_char) && ($next_char eq "'")) {
             $i++;
-            $token = $token . $next_char;
+            $token .= $next_char;
           } else {
-            $token = $token . $c;
+            $token .= $c;
           }
         } elsif ($c eq "'") {
           # closing quote must be followed by a space or
@@ -851,7 +831,7 @@ sub __split_args {
           undef $token;
           undef $quoted_sign;
         } else {
-          $token = $token . $c;
+          $token .= $c;
         }
       } else {
         last unless defined $c;
@@ -864,7 +844,8 @@ sub __split_args {
         } elsif ($c =~ /['"]/) {
           $quoted_sign = $c;
         } else {
-          $token = ($token || '') . $c;
+          $token = '' unless (defined $token);
+          $token .= $c;
         }
       }
     }
